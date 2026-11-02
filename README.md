@@ -6,9 +6,11 @@ commit, amend, stash, pull and push from the panel, read the diff of whatever
 you pick, and browse the history as a commit graph. It follows the repository
 of the terminal you're focused on.
 
-It replaces the Changes panel that ships with Herdr. That panel lists files
-and shows diffs; its only action is a single Commit that stages everything
-first.
+It's meant to take the place of the Changes panel that ships with Herdr. That
+panel lists files and shows diffs; its only action is a single Commit that
+stages everything first. Installing doesn't swap them by itself: each layout
+picks its own Changes panel, so you point your layouts at this one
+([how](#use-it-as-your-changes-panel)).
 
 ![Changes and History side by side](preview.png)
 
@@ -110,21 +112,43 @@ herdr-app check ~/.config/herdr-app/mods/git-changes
 
 ### Use it as your Changes panel
 
-Herdr's own layouts are read-only. Clone the one you use, then point its
-`changes` block at this mod:
+Installing the mod doesn't replace anything by itself. Which mod the Changes
+button opens is set **in each layout file**, by the block with
+`"id": "changes"`. A layout still pointing at Herdr's `changes` keeps the old
+panel, and this one only opens as a separate pane or tab. Do the step below
+**for every layout you switch between** (`ctrl-shift-l` cycles them).
+
+To see which mod each of your layouts uses for Changes:
 
 ```sh
-herdr-app do layout.clone '{"name":"main","as":"my-main"}'
+cd ~/.config/herdr-app/layouts
+grep -l '"mod": *"changes"' *.json      # still on Herdr's panel
+grep -l '"mod": *"git-changes"' *.json  # already on this one
 ```
 
-In `~/.config/herdr-app/layouts/my-main.json`, find the block with
-`"id": "changes"` (inside the `panel-body` stack) and change its content:
+**A layout of your own** (a clone, or one you wrote): edit it in place. Find
+the block with `"id": "changes"` inside the `panel-body` stack and point it
+at this mod:
 
 ```json
 { "id": "changes", "type": "block", "content": { "mod": "git-changes" } }
 ```
 
-The tab bar's Changes button now opens this panel.
+Herdr reloads the layout within a second; there's no need to restart it.
+
+**Herdr's own `main` layout** is read-only: Herdr restores it on every start,
+and an edit gets moved aside as `main-edited`. Clone it first, then edit the
+clone as above. `layout.clone` switches the window to the clone.
+
+```sh
+herdr-app do layout.clone '{"name":"main","as":"my-main"}'
+```
+
+A layout cloned later starts with Herdr's panel again, so repeat the edit
+there too.
+
+The tab bar's Changes button then opens this panel. A key bound to show the
+`changes` child of `panel-body` opens it too.
 
 Keep the `panel` column around `panel-body`. The tab bar shows and hides the
 panel through it, and without it every click toasts

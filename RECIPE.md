@@ -163,9 +163,13 @@ hint in 11px `dim`. Danger items are `ansi1`.
 
 ## Built from
 
-- **Layout.** A block with `{ "mod": "git-changes" }`. In Herdr's `main`
-  layout, that's the `changes` child of the `panel-body` stack, inside the
-  `panel` column the tab bar shows and hides.
+- **Layout.** A block with `{ "mod": "git-changes" }`. In a clone of Herdr's
+  `main` layout, that's the `changes` child of the `panel-body` stack, inside
+  the `panel` column the tab bar shows and hides. The choice is per layout
+  file: every layout the person switches between needs its `changes` block
+  pointed here, or that layout keeps Herdr's panel. Herdr's own `main` is
+  read-only, so clone it first (`layout.clone`). When installing, list the
+  person's layouts that still say `"mod": "changes"` and offer to switch each.
 - **Roles** (`props.role`):
   - none: the panel.
   - `"menu"`: a popup with `{ owner, items }`.
@@ -233,6 +237,9 @@ hint in 11px `dim`. Danger items are `ansi1`.
 ## Done when
 
 - `herdr-app check mods/git-changes` passes.
+- In every layout the person uses, the tab bar's Changes button opens this
+  panel, not Herdr's. `grep -l '"mod": *"changes"' layouts/*.json` lists only
+  Herdr's own read-only `main.json`, or nothing.
 - `node tests/git.test.mjs` passes. It runs every action against throwaway
   repositories with a bare remote.
 - In a repository with a staged file, a partly staged file and an untracked
