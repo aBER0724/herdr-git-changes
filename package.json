@@ -1,0 +1,6 @@
+{
+  "name": "herdr-git-changes",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node tests/git.test.mjs" }
+}
