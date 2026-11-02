@@ -1,4 +1,4 @@
-# Changes
+# Git Changes
 
 A git panel for the focused terminal's repository, laid out like Zed's git
 panel. It has a Changes tab and a History tab. In Changes you stage files with
@@ -11,7 +11,7 @@ or fetches, a multi-line message, a split Commit button, and the last commit
 with a copyable hash. It replaces Herdr's `changes` block in a layout, and also
 opens as a pane or a tab on one repository.
 
-![Changes](preview.png)
+![Git Changes](preview.png)
 
 ## What you see
 

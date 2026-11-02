@@ -19,15 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Parts of this software come from other projects under their own licenses:
-
-- mods/git-changes/lanes.js, and the parts of history.js, git.js and menu.js
-  marked at their tops, are from herdr-git-graph
-  (https://github.com/rabeeh-ta/herdr-git-graph), MIT License,
-  Copyright (c) 2026 Rabeeh T A. See LICENSES/MIT-herdr-git-graph.txt.
-- The parts of panel.js, diff.js and git.js marked at their tops started as a
-  clone of the Changes mod shipped with Herdr (https://herdr.dev), Apache
-  License 2.0. See LICENSES/Apache-2.0.txt.
-- mods/git-changes/icons are Lucide icons (https://lucide.dev), ISC License.
-  See LICENSES/ISC-Lucide.txt.

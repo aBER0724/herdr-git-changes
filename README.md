@@ -1,4 +1,4 @@
-# Changes for Herdr
+# Git Changes for Herdr
 
 A git panel for the [Herdr](https://herdr.dev) desktop app, laid out like
 [Zed](https://zed.dev)'s git panel. You stage files with checkboxes, then
@@ -13,7 +13,7 @@ stages everything first. Installing doesn't swap them by itself: each layout
 picks its own Changes panel, so you point your layouts at this one
 ([how](#use-it-as-your-changes-panel)).
 
-![Changes and History side by side](preview.png)
+![Git Changes: a two-column diff in the main area, the Changes panel as a folder tree on the right](preview.png)
 
 ## What it does
 
@@ -319,4 +319,4 @@ used.
 ## License
 
 MIT, see [LICENSE](LICENSE). The borrowed parts keep their own licenses, listed
-under [Credits](#credits).
+in [NOTICE](NOTICE) and under [Credits](#credits).
