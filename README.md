@@ -13,7 +13,7 @@ stages everything first. Installing doesn't swap them by itself: each layout
 picks its own Changes panel, so you point your layouts at this one
 ([how](#use-it-as-your-changes-panel)).
 
-![Git Changes: a two-column diff in the main area, the Changes panel as a folder tree on the right](preview.png)
+![Git Changes: a commit picked in History shown in two columns in the main area; beside it the Changes panel as a folder tree, and the History tab with its commit graph](preview.png)
 
 ## What it does
 
