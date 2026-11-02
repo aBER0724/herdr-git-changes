@@ -2,12 +2,14 @@
 
 A git panel for the focused terminal's repository, laid out like Zed's git
 panel. It has a Changes tab and a History tab. In Changes you stage files with
-checkboxes, preview their diffs, and work with stashes. In History you browse a
-commit graph drawn like herdr-git-graph's. A commit area sits at the bottom
-of both: the branch, a remote button that pulls, pushes, publishes or fetches,
-a multi-line message, a split Commit button, and the last commit with a
-copyable hash. It replaces Herdr's `changes` block in a layout, and also opens
-as a pane or a tab on one repository.
+checkboxes and work with stashes; the files show as a folder tree or a flat
+list. In History you browse a commit graph drawn like herdr-git-graph's.
+Clicking a file, stash or commit opens its diff in the main area, in one diff
+tab per space, in one column or two (before | after). A commit area sits at the
+bottom of both tabs: the branch, a remote button that pulls, pushes, publishes
+or fetches, a multi-line message, a split Commit button, and the last commit
+with a copyable hash. It replaces Herdr's `changes` block in a layout, and also
+opens as a pane or a tab on one repository.
 
 ![Changes](preview.png)
 
@@ -22,8 +24,12 @@ bottom:
 - **Toolbar**, 32px, 8px side padding, bottom border, 22px icon buttons in
   `muted`.
   - On Changes: `± View Diff`, the `+N −N` totals in `ansi2` and `ansi1` 11px,
-    a gap, a ☰ (sliders icon) menu button, then `+ Stage All`. That last button
-    reads `− Unstage All` when everything is staged.
+    a gap, two icon pairs, a ☰ (sliders icon) menu button, then `+ Stage All`.
+    That last button reads `− Unstage All` when everything is staged.
+  - Each icon pair is a rounded box (radius 7, 1px `border`, 2px padding) of
+    two 20px cells with 12px icons. The chosen cell is `selected` with an
+    `accent` icon; the other is `muted`. The first pair is Tree (list-tree) or
+    Flat (list); the second is One column (rows) or Two columns (columns).
   - On History: a segmented control `All branches | Current` (20px segments,
     11.5px, the chosen one `raised` with a border), a ☁ toggle (`selected`
     background and `accent` icon when on), the commit count in 11px `dim` on
@@ -36,11 +42,14 @@ bottom:
   - A file row shows: a 14px checkbox (3px radius, `input` border; `accent`
     filled with ✓ when staged, `accent` `−` when partly staged); the status
     letter 11px (`blocked` for M, `ansi2` for A and U, `ansi1` for D and
-    conflicts); the file name; the folder in 11px `dim`; and `+N −N` on the
-    right.
-  - Hovering a file swaps the counts for two 22px buttons: open diff in a tab,
-    and discard (`ansi1`).
-  - The selected row is `selected` with a 1px `accent` border.
+    conflicts); the file name; and `+N −N` on the right. In Flat, the folder
+    follows the name in 11px `dim`.
+  - In Tree, files sit under folder rows, indented 14px per level. A folder
+    row shows a checkbox (all, some or none staged inside), a chevron, a folder
+    icon and the name in `muted`. A folder holding only one folder is merged
+    with it (`src/ui`). A folded folder shows its file count on the right.
+  - Hovering a file swaps the counts for a 22px discard button (`ansi1`).
+  - The row the diff tab shows is `selected` with a 1px `accent` border.
   - A stash row shows a stash icon, its message, and its age in 11px `dim`.
     Hovering it shows Apply, Pop and Drop.
   - With no changes: "No changes to commit", centered, `dim`, and
@@ -66,15 +75,23 @@ bottom:
   - The subject follows the labels; merge commits are `dim`. The date is 11px
     `dim` on the right: `now`, `5m`, `3h` or `2d`, else `Sep 7`, with the year
     once it isn't this year.
-- **The preview** fills the rest when something is picked.
-  - A 28px `raised` title bar: for a commit, a hash chip and its subject;
-    otherwise the file path, the stash, or "All changes". On the right, open in
-    a tab and close.
-  - Then the diff: monospace 11px, 20px rows. The line number is `dim`, `+`/`−`
-    in `ansi2`/`ansi1`. Added lines have an `ansi2` background at 9%, removed
-    ones `ansi1` at 9%.
-  - Hunk headers are `raised` and `dim`. When a diff covers several files,
-    each file starts with a 24px header in bold on `raised`.
+- **The diff tab**, in the main area, a tab of its own named after what it
+  shows (`app.ts`, `stash@{0}`, a short hash), on `background`:
+  - A 38px header: a file, stash or commit icon, the path or subject in
+    semibold, `+N −N`, the One/Two-column pair (22px cells), and a 24px ×.
+  - A 22px line under it in 11px `dim`: what's compared (`Working tree and
+    index against HEAD`, `Commit <hash> · <author> · <when>`, `Stash <ref>`)
+    and the repository path, with `Loading…` on the right while loading.
+  - One column: monospace 12px, 20px rows. Two 38px `dim` gutters (old and new
+    line numbers), the `+`/`−` sign in `ansi2`/`ansi1`, then the text. Added
+    lines have an `ansi2` background at 9%, removed ones `ansi1` at 9%.
+  - Two columns: a 22px `Before | After` header in 11px `muted`, then two equal
+    halves split by a 1px `border`. Each half has one 38px gutter: old numbers
+    on the left, new on the right. An empty cell opposite an unmatched line is
+    `raised` at 53%.
+  - Hunk headers are `raised` and `dim`, across both columns. When a diff
+    covers several files, each file starts with a 24px header in bold on
+    `raised`.
 - **A note**, 11px `ansi1`, above the commit area when git refuses something.
   Click it to dismiss.
 - **The commit area**, on `chrome` with a top border:
@@ -111,23 +128,45 @@ hint in 11px `dim`. Danger items are `ansi1`.
     diff.autoRefreshIndex=false`, so they don't wake the watch.
 - **Agent status** isn't shown; this panel is about one repository.
 - **Clicks.**
-  - Clicking a file, stash or commit previews it; clicking the same one closes
-    the preview. Double-clicking opens it in a tab.
-  - A checkbox stages or unstages without selecting the row.
-  - A group's checkbox stages the whole group, or unstages it when all of it is
-    staged.
+  - Clicking a file, stash, commit, the uncommitted row or View Diff shows it
+    in the main area: `showInTab()` writes `shared("git-changes.view")[space]
+    = { item, source: { root, on }, at, tab, opening }`.
+    - If that space's diff tab is still open, it's renamed and selected.
+    - Otherwise `tab.new {space, name, mod: "git-changes", props: { role:
+      "diff", space }}` makes one. A click within 1.5s of asking waits for it
+      instead of making a second tab.
+    - The tab reads its entry, and on first sight writes its own tab id into
+      it (the tab in that space holding a `git-changes` pane, the shown one
+      first).
+    - Closing the tab leaves a stale id; the next click finds the tab gone and
+      makes a new one.
+  - A folder row toggles folding. A checkbox stages or unstages without opening
+    the file.
+  - A group's or a folder's checkbox stages everything in it, or unstages it
+    when all of it is staged.
+  - The Tree/Flat and One/Two-column pairs switch at once. The column choice is
+    `shared("git-changes.layout")`, so the panel's pair and every diff tab's
+    pair stay in step.
   - Right-click menus:
-    - File: stage or unstage, open in a tab, copy path, copy full path, and
+    - File: stage or unstage, Show diff, copy path, copy full path, and
       Discard (danger).
-    - Stash: Apply, Pop, open in a tab, and Drop (danger).
+    - Stash: Apply, Pop, Show diff, and Drop (danger).
     - Commit: checkout each local branch on it, checkout each remote-only
-      branch with tracking, checkout this commit (detached), open in a tab,
-      copy hash (⌘C), copy short hash, copy message, Uncommit (last commit
-      only), and Revert.
+      branch with tracking, checkout this commit (detached), Show diff, copy
+      hash (⌘C), copy short hash, copy message, Uncommit (last commit only),
+      and Revert.
   - In History, right-clicking the uncommitted row opens the ☰ menu.
-- **Keys.** ⌘↩ (or ctrl-↩) commits. ⌘C (or ctrl-shift-c) copies the selected
-  commit's hash, except while the message box has the keyboard. Esc leaves the
-  message box. In menus: ↑/↓, ↩ or space, Esc.
+- **Keys.** ⌘↩ (or ctrl-↩) commits. ⌘C (or ctrl-shift-c) copies the hash of
+  the commit the diff tab shows, except while the message box has the
+  keyboard. Esc leaves the message box. In menus: ↑/↓, ↩ or space, Esc. In two
+  columns, a sideways scroll (trackpad, or Shift+wheel) moves both columns'
+  text together.
+- **The diff tab follows the files.** It watches the repository (local) or
+  polls it every 10s, and reloads, except for a commit, which can't change.
+  A pick that arrives while one is loading is loaded right after.
+- **Where the panel looks while the diff tab is focused.** The diff tab is a
+  mod pane with no folder. When the focused pane is it, the panel keeps the
+  repository the tab shows, instead of falling back to the space's folder.
 - **The Commit button.**
   - With anything staged it reads `Commit` and runs `git commit -m`. With
     nothing staged but tracked changes, it reads `Commit Tracked` and runs
@@ -158,7 +197,8 @@ hint in 11px `dim`. Danger items are `ansi1`.
     `HEAD`.
   - 300 commits are read first, and 300 more when the list scrolls to its end.
   - Each panel copy remembers (in its `localStorage`): the last tab, All or
-    Current, ☁, Signoff, and which groups are folded.
+    Current, ☁, Signoff, which groups and folders are folded, and Tree or
+    Flat.
 - **Motion.** None; nothing animates.
 
 ## Built from
@@ -173,17 +213,23 @@ hint in 11px `dim`. Danger items are `ansi1`.
 - **Roles** (`props.role`):
   - none: the panel.
   - `"menu"`: a popup with `{ owner, items }`.
-  - `"diff"`: a tab with `{ root, on, item }`, opened by
-    `tab.new {mod: "git-changes", props}`.
+  - `"diff"`: the diff tab, with `{ space }`. What it shows comes from
+    `shared("git-changes.view")[space]`, not from props, so one tab serves
+    every later pick.
 - **Panel props:** `folder`, `on`, and `tab` (`"changes"` or `"history"`).
 - **Files:**
   - `main.js`: picks the role.
-  - `panel.js`: state, refresh, actions, the Changes tab and the commit area.
+  - `panel.js`: state, refresh, actions, the Changes tab (tree and flat) and
+    the commit area.
   - `history.js`: the graph.
   - `lanes.js`: lane layout, copied unchanged from herdr-git-graph.
-  - `diff.js`: loading and drawing diffs, and the diff tab.
+  - `diff.js`: loading diffs, `showInTab()`, and the diff tab with its one-
+    and two-column views.
   - `menu.js`: menus.
-  - `git.js`: parsing and argv, with no Herdr imports, so `node` can test it.
+  - `git.js`: parsing, `fileTree()` (folders first, single-folder chains
+    merged, folded paths skipped), `splitRows()` (removed and added lines
+    paired by position inside a block), and every argv. No Herdr imports, so
+    `node` can test it.
 - **Menus.** A menu can't run git itself: a popup's tasks end when it closes.
   It posts `setShared("git-changes.pick", { owner, id, at })`, and the panel
   whose `owner` id matches runs the action it remembered under that id.
@@ -199,7 +245,8 @@ hint in 11px `dim`. Danger items are `ansi1`.
   - Every action is an argv list in `git.js`.
 - **Herdr:** `spaces`, `panes`, `focused`, `exec`, `readTextFile`,
   `watchFolder`, `theme`, `settings`, `notify`, `shared`, `setShared`,
-  `openOverlay`, `closeOverlay`, `props`, `run("tab.new")`.
+  `openOverlay`, `closeOverlay`, `props`, and `run` for `tab.new`,
+  `tab.rename`, `tab.select`, `tab.close`.
 - **gpui:** `TextareaState` and `Textarea`, `v_virtual_list`, `Scrollbar`,
   `PathBuilder` with `window.paint_path`, and `write_to_clipboard`.
 - **Art:** Lucide icons in `icons/` (ISC). Most come from herdr-git-graph;
@@ -224,11 +271,17 @@ hint in 11px `dim`. Danger items are `ansi1`.
   and every space switch.
 - **Remote branches each take a lane.** In one repository, 300 commits needed
   16 lanes with them and 7 without. That's why ☁ is off by default.
-- **Submodules** have no hunks: their preview is the `Subproject commit` lines
+- **Submodules** have no hunks: their diff is the `Subproject commit` lines
   or "Submodule: untracked content".
+- **Two columns need one list.** Two virtual lists side by side drift apart
+  as they scroll. Pair the rows first, then draw each pair as one row with
+  both halves. Sideways scrolling is an offset applied to both texts; the
+  gutters stay put.
+- **A mod can't import another mod's files**, not even for a test helper:
+  `herdr-app check` refuses paths outside its folder.
 - **Limits:**
   - 1,000 changed files.
-  - 5,000 preview lines; an untracked file's preview stops at 3,000 lines.
+  - 5,000 diff lines; an untracked file shows its first 3,000 lines.
   - Lines past 4,000 characters are cut.
   - Whole-file staging only; renames show as a delete and an add.
 - **Assumptions:** git 2.35 or newer (`git stash push --staged`), and Herdr
@@ -242,6 +295,15 @@ hint in 11px `dim`. Danger items are `ansi1`.
   Herdr's own read-only `main.json`, or nothing.
 - `node tests/git.test.mjs` passes. It runs every action against throwaway
   repositories with a bare remote.
+- `node tests/ui.test.mjs` passes. It renders the panel and the diff tab,
+  every row included, and clicks through them.
+- Clicking a file opens a tab in the main area named after it, showing its
+  diff. Clicking another file renames and reuses that tab. After closing it,
+  the next click opens a new one.
+- The Two-columns pair shows `Before | After`. A block of 2 removed and 1 added
+  lines makes 2 rows: the first pairs, the second has an empty right side.
+- Tree shows `src/ui` merged into one row when `src` holds nothing else.
+  Folding it hides its files. Flat shows each file with its folder beside it.
 - In a repository with a staged file, a partly staged file and an untracked
   file:
   - the checkboxes read ✓, `−` and empty;
@@ -249,11 +311,12 @@ hint in 11px `dim`. Danger items are `ansi1`.
   - committing leaves the other two.
 - With nothing staged, the button reads `Commit Tracked`, and committing leaves
   only untracked files.
-- Stash with a message, then Pop: the files come back, and the stash's preview
+- Stash with a message, then Pop: the files come back, and the stash's diff
   showed the untracked file too.
 - On a branch with no upstream, the remote button reads `Publish`. After it,
   one commit later, it reads `↑1 Push`.
 - History draws a merge as two lanes joined by a curve, puts `✓ main` first on
   HEAD's row, and has a dashed line from the uncommitted row to HEAD.
 - Turning ☁ on or off adds or removes a remote-only branch's lane.
-- ⌘C on a selected commit puts its 40-character hash on the clipboard.
+- ⌘C, with a commit in the diff tab, puts its 40-character hash on the
+  clipboard.

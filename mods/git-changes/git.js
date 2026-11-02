@@ -163,7 +163,7 @@ export function diffRows(lines, { headers = false } = {}) {
     const kind = line[0];
     if (kind === "-") rows.push({ kind, number: old++, text: line.slice(1) || " " });
     else if (kind === "+") rows.push({ kind, number: next++, text: line.slice(1) || " " });
-    else if (kind === " ") { old++; rows.push({ kind, number: next++, text: line.slice(1) || " " }); }
+    else if (kind === " ") rows.push({ kind, old: old++, number: next++, text: line.slice(1) || " " });
     else if (line) rows.push({ kind: "", text: line });
   }
   return files > 1 || headers ? rows : rows.filter((r) => r.kind !== "f");
@@ -257,4 +257,56 @@ export const BRANCHES = ["for-each-ref", "--sort=-committerdate", "--count=30", 
 export function gitError(result) {
   const lines = (result.stderr || result.stdout || "").split("\n").map((l) => l.trimEnd()).filter((l) => l && !l.startsWith("hint:"));
   return lines.slice(-6).join("\n") || `git exited with ${result.code}`;
+}
+
+// --- list and diff shapes -----------------------------------------------------
+
+// The changed files as a tree: folders first, sorted; a folder holding a single
+// folder and nothing else is merged into it ("src/ui"), as Zed and VS Code do.
+// `closed` holds folder paths whose children are hidden. Rows are
+// { kind: "folder", name, path, depth, files } or { kind: "file", entry, depth }.
+export function fileTree(entries, closed = new Set()) {
+  const root = { dirs: new Map(), files: [] };
+  for (const entry of entries) {
+    const parts = entry.path.split("/");
+    parts.pop();
+    let node = root, path = "";
+    for (const part of parts) {
+      path = path ? `${path}/${part}` : part;
+      if (!node.dirs.has(part)) node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
+      node = node.dirs.get(part);
+    }
+    node.files.push(entry);
+  }
+  const count = (node) => node.files.length + [...node.dirs.values()].reduce((n, d) => n + count(d), 0);
+  const rows = [];
+  const walk = (node, depth) => {
+    for (const dir of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      let d = dir, name = dir.name;
+      while (d.files.length === 0 && d.dirs.size === 1) { d = [...d.dirs.values()][0]; name = `${name}/${d.name}`; }
+      rows.push({ kind: "folder", name, path: d.path, depth, files: count(d) });
+      if (!closed.has(d.path)) walk(d, depth + 1);
+    }
+    for (const entry of [...node.files].sort((a, b) => a.path.localeCompare(b.path))) rows.push({ kind: "file", entry, depth });
+  };
+  walk(root, 0);
+  return rows;
+}
+
+// Unified rows as two columns. Removed and added lines next to each other are
+// paired by position, never across a hunk or a context line; a side with
+// nothing opposite gets an empty cell. Headers span both columns.
+export function splitRows(rows) {
+  const out = [], removed = [], added = [];
+  const flush = () => {
+    for (let i = 0; i < Math.max(removed.length, added.length); i++) out.push({ kind: "pair", left: removed[i] ?? null, right: added[i] ?? null });
+    removed.length = 0; added.length = 0;
+  };
+  for (const row of rows) {
+    if (row.kind === "-") removed.push(row);
+    else if (row.kind === "+") added.push(row);
+    else { flush(); out.push(row.kind === " " ? { kind: "pair", left: row, right: row } : row); }
+  }
+  flush();
+  return out;
 }

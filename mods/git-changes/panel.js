@@ -1,8 +1,10 @@
 // The panel, laid out like Zed's git panel: Changes and History tabs; a
-// toolbar with View Diff and Stage All; the files grouped Conflicts, Tracked,
-// Untracked, each with a staging checkbox, then the stashes; the selected
-// item's diff; and at the bottom the branch with its remote button, the
-// commit message, the Commit button and the last commit.
+// toolbar with View Diff, the tree/flat and one/two-column switches, and
+// Stage All; the files grouped Conflicts, Tracked, Untracked, as a folder tree
+// or a flat list, each with a staging checkbox, then the stashes; and at the
+// bottom the branch with its remote button, the commit message, the Commit
+// button and the last commit. Whatever you pick opens in the main area, in
+// one diff tab per space (diff.js).
 // Menus are popups of this same mod (menu.js); what's picked comes back
 // through the shared "git-changes.pick" and runs here.
 //
@@ -15,7 +17,7 @@ import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, notify, shared, setShared, openOverlay, run, props } from "herdr";
 import * as G from "./git.js";
 import { icon, menuHeight } from "./menu.js";
-import { loadDiff, diffView, diffWidth, itemTitle } from "./diff.js";
+import { showInTab, shownIn, shownSource, getLayout, setLayout } from "./diff.js";
 import { History } from "./history.js";
 
 // The focused terminal's folder, or `props.folder` when opened as a pane on one repository.
@@ -24,6 +26,11 @@ function location() {
   if (fixed) return { cwd: fixed, on: props()?.on ?? null };
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  // The diff tab is a mod pane with no folder: keep showing the repository it shows.
+  if (pane?.mod === "git-changes") {
+    const shown = shownSource(space?.id);
+    if (shown) return { cwd: shown.root, on: shown.on ?? null };
+  }
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
 }
@@ -37,7 +44,9 @@ export class Panel {
     this.uid = `gc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     this.entries = []; this.stashes = []; this.remotes = []; this.last = null;
     this.history = new History(); this.panelWidth = 400;
-    this.branch = null; this.rows = []; this.width = 300; this.height = 800;
+    this.branch = null;
+    this.listMode = localStorage.getItem("list") === "flat" ? "flat" : "tree";
+    this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
     this.tab = props()?.tab ?? localStorage.getItem("tab") ?? "changes";
     this.collapsed = JSON.parse(localStorage.getItem("collapsed") ?? "{}");
     this.signoff = localStorage.getItem("signoff") === "1";
@@ -75,7 +84,7 @@ export class Panel {
 
   reset() {
     this.root = null; this.branch = null; this.entries = []; this.stashes = []; this.last = null; this.history.clear();
-    this.open = null; this.setLines([]); this.limited = false;
+    this.limited = false;
   }
 
   refresh(cx) {
@@ -84,7 +93,7 @@ export class Panel {
     if (context !== this.context) {
       this.context = context; this.reset();
       this.message = ""; this.editor.set_value(""); this.amend = false;
-      this.error = null; this.note = null; this.watched = null; this.closed = false;
+      this.error = null; this.note = null; this.watched = null;
     }
     if (!cwd) return;
     this.loading = true; this.again = false;
@@ -114,13 +123,6 @@ export class Panel {
         this.last = last?.code === 0 ? G.parseLog(last.stdout).map((c) => ({ ...c, area: "commit" }))[0] ?? null : null;
         this.error = null;
         this.watch(root, cx);
-        if (this.open && !this.find(this.open)) { this.open = null; this.setLines([]); }
-        // The first file's diff shows until you pick another, as in Zed's panel.
-        if (!this.open && !this.closed && this.tab === "changes" && this.entries.length) this.open = this.entries[0];
-        if (this.open) {
-          try { await this.load(this.find(this.open), context); }
-          catch { if (key() === context) this.setLines(["Cannot preview this diff (too large or unreadable)"]); }
-        }
       } catch (e) { if (key() === context) this.error = String(e?.message ?? e); }
       finally {
         this.loading = false; cx.notify();
@@ -129,46 +131,23 @@ export class Panel {
     });
   }
 
-  find(it) {
-    if (!it) return null;
-    if (it.area === "all") return this.entries.length ? it : null;
-    if (it.area === "commit") return this.history.find(it.hash) ?? (this.last?.hash === it.hash ? this.last : null);
-    const list = it.area === "stash" ? this.stashes : this.entries;
-    return list.find((x) => itemKey(x) === itemKey(it)) ?? null;
-  }
+  // What the space's diff tab shows now, when it's this repository.
+  shown() { return this.root ? shownIn(spaces().find((sp) => sp.active)?.id, this.root) : null; }
+  isShown(item) { return itemKey(this.shown()) === itemKey(item); }
 
-  async load(item, context) {
-    if (!item) return;
-    const untracked = this.entries.filter((e) => e.untracked).map((e) => e.path);
-    const lines = await loadDiff(item, { root: this.root, on: this.on, hasHead: this.hasHead, untracked });
-    if (key() === context && itemKey(this.open) === itemKey(item)) this.setLines(lines, item.area !== "file");
-  }
-
-  setLines(lines, headers = false) { this.rows = G.diffRows(lines, { headers }); this.width = diffWidth(this.rows); }
-
+  // Show it in the main area: one diff tab per space, reused and renamed.
   pick(item, cx) {
-    this.handle.focus();
-    const same = itemKey(this.open) === itemKey(item);
-    this.open = same ? null : item; this.closed = same; this.setLines([]); this.note = null;
-    const context = this.context;
-    if (this.open) cx.spawn(async (cx) => {
-      try { await this.load(item, context); }
-      catch (e) { if (key() === context && itemKey(this.open) === itemKey(item)) this.note = `Cannot preview this diff: ${e?.message ?? e}`; }
-      cx.notify();
-    });
+    const space = spaces().find((sp) => sp.active);
+    if (!space || !this.root) return;
+    this.note = null;
+    showInTab(space.id, item, { root: this.root, on: this.on ?? null });
     cx.notify();
   }
 
   setTab(tab, cx) {
     if (this.tab === tab) return;
     this.tab = tab; localStorage.setItem("tab", tab);
-    this.open = null; this.closed = false; this.setLines([]);
     this.refresh(cx); cx.notify();
-  }
-
-  openTab(item) {
-    if (!this.root) return;
-    run("tab.new", { name: item.area === "all" ? "Diff" : itemTitle(item).split("/").pop().slice(0, 40), mod: "git-changes", props: { role: "diff", root: this.root, on: this.on, item: plain(item) } });
   }
 
   // --- acting -----------------------------------------------------------------
@@ -269,6 +248,13 @@ export class Panel {
     this.act(cx, all ? "Unstage" : "Stage", [all ? (this.hasHead ? ["restore", "--staged", "--", ...paths] : ["rm", "--cached", "-q", "-r", "--", ...paths]) : ["add", "-A", "--", ...paths]]);
   }
 
+  setListMode(mode, cx) { this.listMode = mode; localStorage.setItem("list", mode); cx.notify(); }
+  fold(key, cx) {
+    if (this.folded.has(key)) this.folded.delete(key); else this.folded.add(key);
+    localStorage.setItem("folded", JSON.stringify([...this.folded]));
+    cx.notify();
+  }
+
   // Inline destructive buttons ask on the button itself: the first click arms it, the second runs it.
   arm(id, cx, then) {
     if (this.armed === id) { this.armed = null; then(); return; }
@@ -304,7 +290,7 @@ export class Panel {
     const staged = e.staged === "all";
     this.menu([
       { label: staged ? "Unstage" : e.conflict ? "Mark resolved" : "Stage", icon: staged ? "minus" : "plus", run: (cx) => this.act(cx, staged ? "Unstage" : "Stage", G.toggleArgs(e, this.hasHead)) },
-      { label: "Open diff in a tab", icon: "diff", run: () => this.openTab(e) },
+      { label: "Show diff", icon: "diff", run: (cx) => this.pick(e, cx) },
       { separator: true },
       { label: "Copy path", icon: "copy", copy: e.path },
       { label: "Copy full path", icon: "copy", copy: `${this.root}/${e.path}` },
@@ -317,7 +303,7 @@ export class Panel {
     this.menu([
       { label: "Apply", icon: "check", hint: "keep", run: (cx) => this.act(cx, "Apply stash", G.stashArgs("apply", s.ref)) },
       { label: "Pop", icon: "fetch", hint: "apply & drop", run: (cx) => this.act(cx, "Pop stash", G.stashArgs("pop", s.ref)) },
-      { label: "Open diff in a tab", icon: "diff", run: () => this.openTab(s) },
+      { label: "Show diff", icon: "diff", run: (cx) => this.pick(s, cx) },
       { separator: true },
       { label: "Drop", icon: "trash", danger: true, run: (cx) => this.act(cx, "Drop stash", G.stashArgs("drop", s.ref)) },
     ], cx);
@@ -332,7 +318,7 @@ export class Panel {
       ...remote.map((r) => ({ label: `Checkout ${r.name}`, icon: "cloud", hint: "track", run: (cx) => this.act(cx, "Checkout", G.checkoutRemoteArgs(r.name), { done: `Tracking ${r.name}` }) })),
       !head && { label: "Checkout this commit", icon: "commit", hint: "detached", run: (cx) => this.act(cx, "Checkout", G.detachArgs(c.hash), { done: `Checked out ${c.short}` }) },
       { separator: true },
-      { label: "Open diff in a tab", icon: "diff", run: () => this.openTab(c) },
+      { label: "Show diff", icon: "diff", run: (cx) => this.pick(c, cx) },
       { label: "Copy hash", icon: "copy", hint: "⌘C", copy: c.hash },
       { label: "Copy short hash", icon: "copy", hint: c.short, copy: c.short },
       { label: "Copy message", icon: "copy", copy: c.subject },
@@ -410,6 +396,16 @@ export class Panel {
       .when(Boolean(label || armed), (e) => e.child(armed ? "Sure?" : label));
   }
 
+  // Connected icon toggles: one cell per choice, the chosen one highlighted.
+  pills(id, choices, value, onPick, t) {
+    return h_flex().p(2).gap(2).flex_none().rounded(7).border_1().border_color(t.border).children(choices.map(([v, name, tip]) =>
+      h_flex().id(`${id}-${v}`).size(20).items_center().justify_center().rounded(5).cursor_pointer().tooltip(tip)
+        .text_color(value === v ? t.accent : t.muted).when(value === v, (e) => e.bg(t.selected)).hover((s) => s.bg(value === v ? t.selected : t.hover))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); if (value !== v) onPick(v, cx); })
+        .child(svg(icon(name)).size(12))));
+  }
+
   // A button with a dropdown half, like Zed's "Push ⌄" and "Commit ⌄".
   split(id, text, t, { primary, enabled, onClick, onMenu, tip, iconName }) {
     const fg = !enabled ? t.dim : primary ? t.solid_foreground : t.foreground, bg = primary && enabled ? t.solid : t.raised;
@@ -446,23 +442,23 @@ export class Panel {
       .child(div().min_w(18).px(4).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).text_center().child(String(list.length)));
   }
 
-  fileRow(e, t) {
-    const parts = e.path.split("/"), name = parts.pop(), id = e.path;
+  fileRow(e, t, depth = 0) {
+    const parts = e.path.split("/"), name = parts.pop(), id = e.path, tree = this.listMode === "tree";
     const hovered = this.hovered === id || this.armed === `discard-${id}`;
     const color = e.conflict || e.status === "D" ? t.ansi1 : e.untracked || e.status === "A" ? t.ansi2 : t.blocked;
-    const selected = itemKey(this.open) === itemKey(e);
-    return h_flex().id(`row-${id}`).h(ROW).flex_none().pl(8).pr(6).gap(8).items_center().rounded(6).cursor_pointer()
+    const selected = this.isShown(e);
+    return h_flex().id(`row-${id}`).h(ROW).flex_none().pl(8 + depth * 14).pr(6).gap(8).items_center().rounded(6).cursor_pointer()
       .border_1().border_color(selected ? t.accent : t.background + "00").when(selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+      .tooltip(e.path)
       .on_hover((h, cx) => { if (h) this.hovered = id; else if (this.hovered === id) this.hovered = null; cx.notify(); })
-      .on_click((ev, cx) => (ev.click_count === 2 ? this.openTab(e) : this.pick(e, cx)))
+      .on_click((_ev, cx) => this.pick(e, cx))
       .on_mouse_down("right", (_ev, cx) => { cx.stop_propagation(); this.fileMenu(e, cx); })
       .child(this.checkbox(`stage-${id}`, e.staged, t, (cx) => this.act(cx, e.staged === "all" ? "Unstage" : "Stage", G.toggleArgs(e, this.hasHead))))
       .child(div().w(10).flex_none().text_size(11).text_color(color).child(e.untracked ? "U" : e.status))
       .child(h_flex().flex_1().min_w(0).items_center()
         .child(div().max_w(240).min_w(0).truncate().text_color(e.status === "D" ? t.muted : t.foreground).when(e.status === "D", (el) => el.line_through()).child(name))
-        .child(div().pl(6).min_w(0).flex_1().truncate().text_size(11).text_color(t.dim).child(parts.join("/"))))
+        .when(!tree, (el) => el.child(div().pl(6).min_w(0).flex_1().truncate().text_size(11).text_color(t.dim).child(parts.join("/")))))
       .when(hovered, (el) => el
-        .child(this.iconButton(`tab-${id}`, "diff", "Open diff in a tab", () => this.openTab(e), t))
         .child(this.iconButton(`discard-${id}`, e.untracked ? "trash" : "undo", e.untracked ? "Trash file" : "Discard changes",
           (cx) => this.arm(`discard-${id}`, cx, () => this.act(cx, "Discard", G.discardArgs(e, this.hasHead))), t, { danger: true })))
       .when(!hovered && !e.untracked, (el) => el
@@ -470,12 +466,33 @@ export class Panel {
         .child(div().text_size(11).text_color(t.ansi1).child(`−${e.del}`)));
   }
 
+  folderRow(row, area, list, t) {
+    const key = `${area}:${row.path}`, open = !this.folded.has(key);
+    const inside = list.filter((e) => e.path.startsWith(`${row.path}/`));
+    const state = inside.every((e) => e.staged === "all") ? "all" : inside.some((e) => e.staged !== "none") ? "some" : "none";
+    return h_flex().id(`folder-${key}`).h(ROW).flex_none().pl(8 + row.depth * 14).pr(6).gap(6).items_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip(row.path)
+      .on_click((_e, cx) => this.fold(key, cx))
+      .child(this.checkbox(`stage-dir-${key}`, state, t, (cx) => this.toggleSection(inside, cx)))
+      .child(svg(icon(open ? "chevron-down" : "chevron-right")).size(11).flex_none().text_color(t.dim))
+      .child(svg(icon("folder")).size(13).flex_none().text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(row.name))
+      .when(!open, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(String(row.files))));
+  }
+
+  // A group's files, as a folder tree or a flat list.
+  groupRows(area, list, t) {
+    if (this.listMode === "flat") return list.map((e) => this.fileRow(e, t));
+    const closed = new Set([...this.folded].filter((k) => k.startsWith(`${area}:`)).map((k) => k.slice(area.length + 1)));
+    return G.fileTree(list, closed).map((r) => (r.kind === "folder" ? this.folderRow(r, area, list, t) : this.fileRow(r.entry, t, r.depth)));
+  }
+
   stashRow(s, t) {
-    const id = `stash-${s.ref}`, hovered = this.hovered === id || this.armed === `drop-${s.ref}`, selected = itemKey(this.open) === itemKey(s);
+    const id = `stash-${s.ref}`, hovered = this.hovered === id || this.armed === `drop-${s.ref}`, selected = this.isShown(s);
     return h_flex().id(`row-${id}`).h(ROW).flex_none().pl(8).pr(6).gap(8).items_center().rounded(6).cursor_pointer()
       .border_1().border_color(selected ? t.accent : t.background + "00").when(selected, (el) => el.bg(t.selected)).hover((st) => st.bg(t.hover))
       .on_hover((h, cx) => { if (h) this.hovered = id; else if (this.hovered === id) this.hovered = null; cx.notify(); })
-      .on_click((ev, cx) => (ev.click_count === 2 ? this.openTab(s) : this.pick(s, cx)))
+      .on_click((_ev, cx) => this.pick(s, cx))
       .on_mouse_down("right", (_ev, cx) => { cx.stop_propagation(); this.stashMenu(s, cx); })
       .child(svg(icon("stash")).size(13).flex_none().text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().child(s.subject || s.ref))
@@ -486,16 +503,12 @@ export class Panel {
         .child(this.iconButton(`drop-${s.ref}`, "trash", "Drop", (cx) => this.arm(`drop-${s.ref}`, cx, () => this.act(cx, "Drop stash", G.stashArgs("drop", s.ref))), t, { danger: true })));
   }
 
-  // A row of the graph picked: the uncommitted row shows every change, a double click opens a tab.
-  pickCommit(c, clicks, cx) {
-    const item = c.uncommitted ? { area: "all" } : c;
-    if (clicks >= 2) return this.openTab(item);
-    this.pick(item, cx);
-  }
+  // A row of the graph picked: the uncommitted row shows every change.
+  pickCommit(c, _clicks, cx) { this.pick(c.uncommitted ? { area: "all" } : c, cx); }
 
   historyView(t) {
     return this.history.view(t, {
-      selected: this.open?.area === "all" ? G.UNCOMMITTED : this.open?.area === "commit" ? this.open.hash : null,
+      selected: ((s) => (s?.area === "all" ? G.UNCOMMITTED : s?.area === "commit" ? s.hash : null))(this.shown()),
       panelWidth: this.panelWidth, loading: this.loading,
       onPick: (c, clicks, cx) => this.pickCommit(c, clicks, cx),
       onMenu: (c, cx) => (c.uncommitted ? this.optionsMenu(cx) : this.commitMenu(c, cx)),
@@ -506,20 +519,19 @@ export class Panel {
   changesList(t) {
     const out = [], conflicts = [], tracked = [], untracked = [];
     for (const e of this.entries) (e.conflict ? conflicts : e.untracked ? untracked : tracked).push(e);
-    let rows = 0;
     for (const [area, title, list] of [["conflict", "Conflicts", conflicts], ["tracked", "Tracked", tracked], ["untracked", "Untracked", untracked], ["stash", "Stashes", this.stashes]]) {
       if (!list.length) continue;
-      out.push(this.sectionHeader(area, title, list, t)); rows++;
+      out.push(this.sectionHeader(area, title, list, t));
       if (this.collapsed[area]) continue;
-      for (const it of list) { out.push(area === "stash" ? this.stashRow(it, t) : this.fileRow(it, t)); rows++; }
+      const items = area === "stash" ? list.map((it) => this.stashRow(it, t)) : this.groupRows(area, list, t);
+      out.push(...items);
     }
     if (!this.entries.length) {
       out.unshift(v_flex().py(18).gap(4).items_center().text_color(t.dim)
         .child(div().child(this.loading && !this.root ? "Loading…" : "No changes to commit"))
         .when(this.branch?.ahead > 0, (e) => e.child(div().text_size(11).child(`${this.branch.ahead} commit${this.branch.ahead > 1 ? "s" : ""} to push`))));
-      rows += 3;
     }
-    return { out, height: rows * ROW };
+    return { out };
   }
 
   tabs(t) {
@@ -548,9 +560,11 @@ export class Panel {
         .child(this.iconButton("refresh-h", "refresh", "Refresh", (cx) => this.refresh(cx), t, { disabled: busy }));
     }
     return h_flex().h(32).flex_none().px(8).gap(4).items_center().border_b(1).border_color(t.border)
-      .child(this.iconButton("view-diff", "diff", "Open every change in a tab", () => this.openTab({ area: "all" }), t, { label: "View Diff", disabled: !any }))
+      .child(this.iconButton("view-diff", "diff", "Show every change in the main area", (cx) => this.pick({ area: "all" }, cx), t, { label: "View Diff", disabled: !any }))
       .when(any, (e) => e.child(div().pl(4).text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
       .child(div().flex_1())
+      .child(this.pills("list", [["tree", "list-tree", "Folder tree"], ["flat", "list", "Flat list"]], this.listMode, (m, cx) => this.setListMode(m, cx), t))
+      .child(this.pills("layout", [["unified", "rows", "Diff in one column"], ["split", "columns", "Diff in two columns: before | after"]], getLayout(), (m, cx) => { setLayout(m); cx.notify(); }, t))
       .child(this.iconButton("options", "sliders", "More", (cx) => this.optionsMenu(cx), t))
       .child(this.iconButton("stage-all", allStaged ? "minus" : "plus", allStaged ? "Unstage everything" : "Stage everything",
         (cx) => this.act(cx, allStaged ? "Unstage" : "Stage", allStaged ? G.unstageAllArgs(this.hasHead) : G.stageAllArgs()), t, { label: allStaged ? "Unstage All" : "Stage All", disabled: busy || !any }));
@@ -624,7 +638,7 @@ export class Panel {
       .on_click((_e, cx) => this.pick(c, cx))
       .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.commitMenu(c, cx); })
       .child(this.hashChip(c, t))
-      .child(div().flex_1().min_w(0).truncate().text_color(itemKey(this.open) === itemKey(c) ? t.accent : t.muted).child(c.subject))
+      .child(div().flex_1().min_w(0).truncate().text_color(this.isShown(c) ? t.accent : t.muted).child(c.subject))
       .child(this.iconButton("uncommit", "undo", "Uncommit (keep the changes staged)", (cx) => this.arm("uncommit", cx, () => this.uncommit(cx)), t, { disabled: Boolean(this.busy) }))
       .child(this.iconButton("history", "history", "History", (cx) => this.setTab("history", cx), t));
   }
@@ -636,39 +650,28 @@ export class Panel {
     this.takePick(cx);
     const t = theme();
     const history = this.tab === "history" && Boolean(this.root);
-    let list = [], contentH = 60;
-    if (history) contentH = Math.max(1, this.history.commits.length) * 24;
-    else if (this.root) { const r = this.changesList(t); list = r.out; contentH = r.height; }
-    const preview = Boolean(this.open);
-    const listH = Math.max(80, Math.min(contentH + 12, Math.floor(this.height * (history ? 0.5 : 0.4))));
+    const list = !history && this.root ? this.changesList(t).out : [];
     const graph = history && (this.history.commits.length
       ? this.historyView(t)
       : div().flex_1().p(12).text_color(t.dim).child(this.hasHead ? "Loading history…" : "No commits yet"));
     return v_flex().id("git-changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_size_change((size, cx) => {
         const width = Math.round(size.width / (settings().zoom ?? 1));
-        if (Math.abs(size.height - this.height) > 1 || width !== this.panelWidth) { this.height = size.height; this.panelWidth = width; cx.notify(); }
+        if (width !== this.panelWidth) { this.panelWidth = width; cx.notify(); }
       })
       .on_key_down((e, cx) => {
         if (e.keystroke === "cmd-enter" || e.keystroke === "ctrl-enter") { this.commit(cx, false); cx.stop_propagation(); }
         // ⌘C on the panel (not while typing) copies the selected commit's hash.
-        else if ((e.keystroke === "cmd-c" || e.keystroke === "ctrl-shift-c") && !this.typing && this.open?.area === "commit") { this.copyHash(this.open, cx); cx.stop_propagation(); }
+        else if ((e.keystroke === "cmd-c" || e.keystroke === "ctrl-shift-c") && !this.typing && this.shown()?.area === "commit") { this.copyHash(this.shown(), cx); cx.stop_propagation(); }
         else if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
       .child(this.tabs(t))
       .when(Boolean(this.root), (e) => e.child(this.toolbar(t)))
-      .when(history, (e) => e.child(v_flex().when(preview, (el) => el.flex_none().h(listH)).when(!preview, (el) => el.flex_1()).min_h(0).child(graph)))
-      .when(!history, (e) => e.child(v_flex().id("git-changes-list").when(preview, (el) => el.flex_none().h(listH)).when(!preview, (el) => el.flex_1()).min_h(0).overflow_y_scrollbar().p(6)
+      .when(history, (e) => e.child(v_flex().flex_1().min_h(0).child(graph)))
+      .when(!history, (e) => e.child(v_flex().id("git-changes-list").flex_1().min_h(0).overflow_y_scrollbar().p(6)
         .children(list)
         .when(!this.root, (el) => el.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : "No folder"))))))
       .when(this.limited, (e) => e.child(div().px(12).py(4).text_size(11).text_color(t.dim).child(`Showing the first ${G.LIMIT.toLocaleString()} files`)))
-      .when(preview, (e) => e
-        .child(h_flex().h(28).flex_none().px(10).gap(6).items_center().border_t(1).border_b(1).border_color(t.border).bg(t.raised).text_size(11.5)
-          .when(this.open?.area === "commit", (el) => el.child(this.hashChip(this.open, t)))
-          .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(this.open?.area === "commit" ? this.open.subject : itemTitle(this.open)))
-          .child(this.iconButton("preview-tab", "diff", "Open in a tab", () => this.openTab(this.open), t, { size: 20 }))
-          .child(this.iconButton("preview-close", "minus", "Close the preview", (cx) => this.pick(this.open, cx), t, { size: 20 })))
-        .child(diffView("git-changes-diff", this.rows, this.width, t)))
       .when(Boolean(this.note), (e) => e.child(div().id("note").px(10).py(6).flex_none().border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).cursor_pointer().tooltip("Click to dismiss")
         .on_click((_e, cx) => { this.note = null; cx.notify(); }).child(this.note)))
       .when(Boolean(this.root && this.branch), (e) => e.child(v_flex().flex_none().border_t(1).border_color(t.border).bg(t.chrome)
