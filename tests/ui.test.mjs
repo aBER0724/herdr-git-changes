@@ -121,6 +121,21 @@ H.focused = { space: "sp1", tab: "tb1", pane: "p1", terminal: "t1", cwd: repo };
 
 const { Panel } = await import(pathToFileURL(join(lib, "panel.js")).href);
 const { DiffView } = await import(pathToFileURL(join(lib, "diff.js")).href);
+const { Menu } = await import(pathToFileURL(join(lib, "menu.js")).href);
+
+// Exercise the popup's real confirmation and shared-pick protocol, not its callbacks.
+const chooseMenu = (overlay, label) => {
+  const saved = H.currentProps;
+  try {
+    H.currentProps = { ...overlay.props, overlay: "test-popup" };
+    const menu = new Menu();
+    menu.init(cx);
+    const i = overlay.props.items.findIndex((it) => it.label === label);
+    assert.ok(i >= 0, `no menu item ${label}`);
+    menu.choose(i, cx);
+    if (overlay.props.items[i].danger) menu.choose(i, cx);
+  } finally { H.currentProps = saved; }
+};
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -247,6 +262,126 @@ await test("History renders the graph and a commit opens in the diff tab", async
   const opened = H.runs.find(([n]) => n === "tab.new");
   assert.equal(H.shared["git-changes.view"].sp1.item.area, "commit");
   assert.ok(opened && /^[0-9a-f]{7}$/.test(opened[1].name), "named after the short hash");
+});
+
+await test("a confirmed file menu cannot discard in a different repository", async () => {
+  const other = join(base, "other");
+  execFileSync("git", ["clone", "-q", repo, other], { env });
+  const path = "src/app.ts", dirty = "B's uncommitted work\n";
+  writeFileSync(join(other, path), dirty);
+  H.currentProps = { folder: repo };
+  panel.refresh(cx); await settle();
+  panel.fileMenu(panel.entries.find((e) => e.path === path), cx);
+  const oldMenu = H.overlays.at(-1);
+  H.currentProps = { folder: other };
+  panel.refresh(cx); await settle();
+  chooseMenu(oldMenu, "Discard changes");
+  panel.render(cx); await settle();
+  assert.equal(readFileSync(join(other, path), "utf8"), dirty, "B's file must survive A's menu");
+});
+
+await test("a delayed result cannot select a replacement menu item", async () => {
+  H.currentProps = { folder: repo };
+  panel.refresh(cx); await settle();
+  const file = panel.entries.find((e) => e.path === "src/app.ts");
+  panel.fileMenu(file, cx);
+  const oldMenu = H.overlays.at(-1);
+  panel.fileMenu(file, cx);
+  const newMenu = H.overlays.at(-1);
+  try {
+    chooseMenu(oldMenu, "Stage");
+    panel.render(cx); await settle();
+    assert.equal(git("diff", "--cached", "--name-only", "--", file.path), "", "old pick must not run the new Stage callback");
+    chooseMenu(newMenu, "Stage");
+    panel.render(cx); await settle();
+    assert.equal(git("diff", "--cached", "--name-only", "--", file.path).trim(), file.path, "the current menu still works");
+  } finally { git("reset", "-q", "--", file.path); }
+});
+
+await test("a queued menu callback is invalidated by a context switch, even during a read", async () => {
+  panel.refresh(cx); await settle();
+  const file = panel.entries.find((e) => e.path === "src/app.ts");
+  panel.fileMenu(file, cx);
+  chooseMenu(H.overlays.at(-1), "Stage");
+  panel.render(cx); // Receives the pick, but its spawned callback has not run.
+  panel.refresh(cx); // A read is now pending too.
+  H.currentProps = { folder: join(base, "other") };
+  panel.render(cx);
+  H.currentProps = { folder: repo };
+  panel.render(cx); // Returning to A must not resurrect its pending callback.
+  await settle();
+  try { assert.equal(git("diff", "--cached", "--name-only", "--", file.path), ""); }
+  finally { git("reset", "-q", "--", file.path); }
+});
+
+await test("a menu cannot cross machines with the same repository path", async () => {
+  H.currentProps = { folder: repo, on: "machine-a" };
+  panel.refresh(cx); await settle(); // The exec stand-in uses the sandbox for both machines.
+  const file = panel.entries.find((e) => e.path === "src/app.ts");
+  panel.fileMenu(file, cx);
+  const oldMenu = H.overlays.at(-1);
+  H.currentProps = { folder: repo, on: "machine-b" };
+  panel.refresh(cx); await settle();
+  chooseMenu(oldMenu, "Stage");
+  panel.render(cx); await settle();
+  try { assert.equal(git("diff", "--cached", "--name-only", "--", file.path), ""); }
+  finally { git("reset", "-q", "--", file.path); }
+});
+
+await test("an old amend message read cannot populate the new repository", async () => {
+  H.currentProps = { folder: repo };
+  panel.refresh(cx); await settle();
+  const realExec = H.exec;
+  let release, started;
+  const reading = new Promise((resolve) => { started = resolve; });
+  H.exec = (cmd, args, opts) => {
+    if (args.includes("--format=%B") && opts.cwd === repo) {
+      started();
+      return new Promise((resolve) => { release = resolve; });
+    }
+    return realExec(cmd, args, opts);
+  };
+  try {
+    panel.toggleAmend(cx);
+    await reading;
+    H.currentProps = { folder: join(base, "other") };
+    panel.refresh(cx); await settle();
+    panel.toggleAmend(cx); await settle();
+    const currentMessage = panel.message;
+    panel.message = ""; panel.editor.set_value(""); // The user clears B's prefill while still amending.
+    release({ code: 0, stdout: "A's old commit message\n", stderr: "" });
+    await settle();
+    assert.equal(currentMessage, "init", "B's own amend read completed");
+    assert.equal(panel.editor.value(), "", "A's late reply must not overwrite B's editor");
+  } finally { H.exec = realExec; }
+});
+
+await test("a running commit keeps its target but cannot clear a later context's message", async () => {
+  H.currentProps = { folder: repo };
+  panel.refresh(cx); await settle();
+  const realExec = H.exec;
+  let release, started, target;
+  const committing = new Promise((resolve) => { started = resolve; });
+  H.exec = (cmd, args, opts) => {
+    if (args[0] === "commit") {
+      target = opts;
+      started();
+      return new Promise((resolve) => { release = resolve; });
+    }
+    return realExec(cmd, args, opts);
+  };
+  try {
+    panel.message = "original commit"; panel.editor.set_value(panel.message);
+    panel.commit(cx, false);
+    await committing;
+    H.currentProps = { folder: join(base, "other") }; panel.render(cx);
+    H.currentProps = { folder: repo }; panel.render(cx);
+    panel.message = "new draft"; panel.editor.set_value(panel.message);
+    release({ code: 0, stdout: "", stderr: "" });
+    await settle();
+    assert.equal(target.cwd, repo, "already-started work stays in A");
+    assert.equal(panel.editor.value(), "new draft", "the old completion cannot clear the new draft");
+  } finally { H.exec = realExec; }
 });
 
 rmSync(base, { recursive: true, force: true });

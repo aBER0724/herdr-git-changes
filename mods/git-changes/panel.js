@@ -50,7 +50,7 @@ export class Panel {
     this.tab = props()?.tab ?? localStorage.getItem("tab") ?? "changes";
     this.collapsed = JSON.parse(localStorage.getItem("collapsed") ?? "{}");
     this.signoff = localStorage.getItem("signoff") === "1";
-    this.message = ""; this.menuActions = {};
+    this.message = ""; this.menuActions = {}; this.menuSerial = 0;
     this.pickSeen = shared("git-changes.pick")?.at; this.seenChange = shared("git-graph.changed");
     this.handle = cx.focus_handle();
     this.editor = TextareaState.new({ placeholder: "" });
@@ -83,18 +83,19 @@ export class Panel {
   }
 
   reset() {
+    this.menuActions = {}; this.armed = null;
     this.root = null; this.branch = null; this.entries = []; this.stashes = []; this.last = null; this.history.clear();
     this.limited = false;
   }
 
   refresh(cx) {
-    if (this.loading || this.busy) { this.again = true; return; }
     const { cwd, on } = location(), context = key();
     if (context !== this.context) {
-      this.context = context; this.reset();
+      this.context = context; this.contextVersion = (this.contextVersion ?? 0) + 1; this.reset();
       this.message = ""; this.editor.set_value(""); this.amend = false;
       this.error = null; this.note = null; this.watched = null;
     }
+    if (this.loading || this.busy) { this.again = true; return; }
     if (!cwd) return;
     this.loading = true; this.again = false;
     cx.spawn(async (cx) => {
@@ -156,7 +157,7 @@ export class Panel {
   // work for the busy label and errors; remote work always toasts.
   act(cx, what, cmds, { done, remote, after } = {}) {
     if (!this.root || this.busy || this.context !== key()) return;
-    const root = this.root, on = this.on, context = this.context;
+    const root = this.root, on = this.on, context = this.context, version = this.contextVersion;
     this.busy = what; this.note = null; this.armed = null;
     cx.spawn(async (cx) => {
       try {
@@ -164,11 +165,11 @@ export class Panel {
           const r = await exec("git", args, { cwd: root, on });
           if (r.code !== 0) throw new Error(G.gitError(r));
         }
-        if (key() === context) after?.();
+        if (this.contextVersion === version && key() === context) after?.();
         if (done) notify({ title: done, level: "success", timeout: 3000 });
       } catch (e) {
         const message = String(e?.message ?? e);
-        if (key() === context) this.note = `${what} failed: ${message}`;
+        if (this.contextVersion === version && key() === context) this.note = `${what} failed: ${message}`;
         if (remote) notify({ title: `${what} failed`, body: message, level: "error" });
       } finally {
         this.busy = null;
@@ -230,10 +231,10 @@ export class Panel {
     this.amend = !this.amend;
     if (this.amend && !this.message.trim() && this.last) {
       // The whole last message, body too.
-      const root = this.root, on = this.on;
+      const root = this.root, on = this.on, context = this.context, version = this.contextVersion;
       cx.spawn(async (cx) => {
         const r = await exec("git", [...G.READ, "log", "-1", "--format=%B"], { cwd: root, on });
-        if (r.code === 0 && this.amend && !this.message.trim()) { this.message = r.stdout.trim(); this.editor.set_value(this.message); }
+        if (this.contextVersion === version && key() === context && r.code === 0 && this.amend && !this.message.trim()) { this.message = r.stdout.trim(); this.editor.set_value(this.message); }
         cx.notify();
       });
     }
@@ -266,11 +267,19 @@ export class Panel {
   // --- menus ------------------------------------------------------------------
 
   menu(items, cx, width = 250) {
-    this.menuActions = {};
+    if (!this.root || this.context !== key()) return;
+    const root = this.root, on = this.on, context = this.context;
+    const actions = this.menuActions = {}, serial = ++this.menuSerial;
     const out = items.filter(Boolean).map((it, i) => {
       if (it.separator) return { separator: true };
-      const id = `m${i}`;
-      if (it.run) this.menuActions[id] = it.run;
+      // IDs never repeat in this panel, even when an old popup delivers late.
+      const id = `m${serial}-${i}`;
+      if (it.run) actions[id] = (cx) => {
+        // Check at execution, not just receipt: takePick schedules another task.
+        if (this.menuActions !== actions || this.root !== root || this.on !== on || this.context !== context || key() !== context) return;
+        this.menuActions = {};
+        it.run(cx);
+      };
       const { run: _r, ...rest } = it;
       return { ...rest, id };
     }).filter((it, i, a) => !(it.separator && (i === 0 || i === a.length - 1 || a[i - 1].separator)));
