@@ -233,7 +233,12 @@ hint in 11px `dim`. Danger items are `ansi1`.
 - **Menus.** A menu can't run git itself: a popup's tasks end when it closes.
   It posts `setShared("git-changes.pick", { owner, id, at })`, and the panel
   whose `owner` id matches runs the action it remembered under that id.
-  Clipboard items copy in the popup.
+  Clipboard items copy in the popup. Action IDs are unique per menu opening.
+  The panel clears pending actions and inline confirmations on a context change,
+  even during a read or action, and checks the originating root, machine and
+  context again when a queued menu callback runs. A replaced menu's picks are
+  ignored. In-flight git work keeps its original target; late completions and
+  amend-message reads cannot edit a later context's message or error note.
 - **Git:**
   - status: `status --porcelain=v2 --branch -z --no-renames --untracked-files=all`
   - counts: `diff HEAD --numstat -z` (before the first commit, `--cached` and
